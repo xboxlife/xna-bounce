@@ -2,12 +2,18 @@
 Microsoft Visual Studio Solution File, Format Version 11.00
 # Visual C# Express 2010
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bounce_Windows", "Bounce\Bounce_Windows.csproj", "{5CB4E9F7-F7D5-45D8-B9A1-8ADFE6AC7772}"
+	ProjectSection(ProjectDependencies) = postProject
+		{D3284E85-FE4A-4BFB-ADDA-4A759C5C1719} = {D3284E85-FE4A-4BFB-ADDA-4A759C5C1719}
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BounceContent", "BounceContent\BounceContent.contentproj", "{4F30CFC3-4555-414B-9701-0A17BE7ED6F2}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NormalMapProcessor", "NormalMapProcessor\NormalMapProcessor.csproj", "{D3284E85-FE4A-4BFB-ADDA-4A759C5C1719}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bounce_Xbox360", "Bounce\Bounce_Xbox360.csproj", "{F82DEEE1-2867-46A9-AB2D-09F8256C34D5}"
+	ProjectSection(ProjectDependencies) = postProject
+		{D3284E85-FE4A-4BFB-ADDA-4A759C5C1719} = {D3284E85-FE4A-4BFB-ADDA-4A759C5C1719}
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

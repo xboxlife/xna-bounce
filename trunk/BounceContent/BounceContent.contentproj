@@ -97,10 +97,6 @@
       <Importer>FontDescriptionImporter</Importer>
       <Processor>FontDescriptionProcessor</Processor>
     </Compile>
-    <None Include="Models\arena.bsp">
-      <Name>arena</Name>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <Compile Include="UI_Font.spritefont">
       <Name>UI_Font</Name>
       <Importer>FontDescriptionImporter</Importer>
