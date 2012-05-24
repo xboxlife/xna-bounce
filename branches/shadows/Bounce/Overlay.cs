@@ -12,7 +12,7 @@
 //                                                                                            //
 // Part of Portfolio projects, www.theomader.com                                              //
 //                                                                                            //
-// Copyright 2011. All rights reserved.                                                       //
+// Copyright 2012. All rights reserved.                                                       //
 // ========================================================================================== //
 
 
@@ -26,6 +26,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Content;
 
+using System.Linq;
 
 namespace Bounce
 {
@@ -161,6 +162,55 @@ namespace Bounce
             }
         }
 
+        private bool mDebugText;
+        public bool debugText
+        {
+            get { return mDebugText; }
+            set
+            {
+                mDebugText = value;
+                mDebugTextMessage = mDebugText ?
+                    "DebugText: 1" :
+                    "DebugText: 0";
+            }
+        }
+
+
+        private Renderer.ShadowMapOverlayMode mShadowOverlayMode;
+        public Renderer.ShadowMapOverlayMode shadowOverlayMode
+        {
+            get { return mShadowOverlayMode; }
+            set
+            {
+                mShadowOverlayMode = value;
+                mShadowOverlayMessage = "Press E to visualize the shadow maps";
+            }
+        }
+
+        private BounceGame.VirtualCameraMode mVirtualCameraMode;
+        public BounceGame.VirtualCameraMode virtualCameraMode
+        {
+            get { return mVirtualCameraMode; }
+            set
+            {
+                mVirtualCameraMode = value;
+                mVirtualCameraMessage = "Press X to toggle the virtual camera";
+                if (mVirtualCameraMode != BounceGame.VirtualCameraMode.None)
+                    mVirtualCameraMessage += "\nPress V to rotate the virtual camera";
+            }
+        }
+
+        private bool mShowShadowSplits;
+        public bool showShadowSplits
+        {
+            get { return mShowShadowSplits; }
+            set
+            {
+                mShowShadowSplits = value;
+                mShadowSplitMessage = "Press T to visualize the shadow splits";
+            }
+        }
+
         private Vector2 mTextTopLeft;
         private float mLineSpacing;
 
@@ -177,6 +227,10 @@ namespace Bounce
         private String mNormalMappingEnabledMessage;
         private String mDrawCollidingTrianglesMessage;
         private String mDrawCollisionGeometryMessage;
+        private String mDebugTextMessage;
+        private String mShadowOverlayMessage;
+        private String mVirtualCameraMessage;
+        private String mShadowSplitMessage;
 
         private String mCollisionsDisplay;
         private String mPhysicsDisplay;
@@ -240,13 +294,10 @@ namespace Bounce
                 mCurIntroMessage = (uint)Math.Min( mCurIntroMessage+1, mIntroMessage.Length );
 
             }
-
-            mCurIntroMessage = (uint)mIntroMessage.Length;
         }
 
         public void draw()
         {
-
             mUI.Begin(SpriteSortMode.BackToFront, BlendState.AlphaBlend);
 
             // are we already past intro message stage?
@@ -255,18 +306,15 @@ namespace Bounce
                 // Find the center of the string
                 Vector2 FontOrigin = mTextTopLeft;
 
-                var lines = new[]
-                    {
-                        mPhysicsDisplay, 
-                        mCollisionsDisplay, 
-                        mRenderingDisplay, 
-                        mTexturesEnabledMessage, 
-                        mNormalMappingEnabledMessage,
-                        mDrawCollidingTrianglesMessage, 
-                        mDrawCollisionGeometryMessage,
-                        "Press L to switch light positions"
-                    };
+                var text = new[]
+                {
+                    mRenderingDisplay,
+                    mShadowOverlayMessage,
+                    mShadowSplitMessage,
+                    mVirtualCameraMessage
+                };
 
+                var lines = text.SelectMany(t => t.Split('\n')).ToArray();
                 for( int line=0; line<lines.Length; ++line)
                 {
                     mUI.DrawString(mUIFont, lines[line], FontOrigin + line * mLineSpacing * Vector2.UnitY, Color.Beige);

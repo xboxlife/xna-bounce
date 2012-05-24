@@ -12,7 +12,7 @@
 //                                                                                            //
 // Part of Portfolio projects, www.theomader.com                                              //
 //                                                                                            //
-// Copyright 2011. All rights reserved.                                                       //
+// Copyright 2012. All rights reserved.                                                       //
 // ========================================================================================== //
 
 
@@ -29,6 +29,8 @@ using Microsoft.Xna.Framework.Storage;
 using System.Diagnostics;
 
 using CollidableModel;
+using BounceModel;
+using System.Linq;
 
 namespace Bounce
 {
@@ -102,22 +104,26 @@ namespace Bounce
         }
 
         private Renderer mRenderer;
+        public Renderer renderer
+        {
+            get { return mRenderer; }
+        }
 
         private Vector3[] mLightPositions;      // predefined hardcoded light positions
         private uint mCurrentLightPosition = 0; // currently used light position
-        private float mLightRotationY;          // current rotation angle of the light around y axis
+        private float mLightRotationY = 0.01f;          // current rotation angle of the light around y axis
 
         BouncingSphereSimlulator mSimulator;    // the sphere simulator
         Overlay mOverlay;                       // GUI overlay
 
-        Model mSphereModel;                     // sphere model (drawn using instancing)
+        BounceModel.BounceModel mSphere;                     // sphere model (drawn using instancing)
         Matrix[] mSpherePositionBuffer;         // cache for model matrices of all simulated spheres
 
         Model mSkyBox;
 
         // temporary storage for colliding triangles. for each triangle, the number of remaining frames 
         // where it will be shown is stored.
-        private Dictionary<Face, uint> mCollidingFacesBuffer; 
+        private Dictionary<Face, uint> mCollidingFacesBuffer = new Dictionary<Face,uint>(); 
         private const uint mNumTicksCollidingFaceIsVisible = 80;   // number of ticks colliding triangles are highlighted
 
 
@@ -130,6 +136,20 @@ namespace Bounce
         // display settings
         public const uint DisplayWidth = 1280;
         public const uint DisplayHeight = 720;
+
+        public bool mBlockInput = false;
+
+        public enum VirtualCameraMode
+        {
+            None,
+            ViewFrustum,
+            ShadowSplits
+        };
+
+        Camera mVirtualCamera = new VirtualCamera();
+        VirtualCameraMode mVirtualCameraMode = VirtualCameraMode.None;
+
+        Renderer.ShadowMapOverlayMode mShadowMapOverlay = Renderer.ShadowMapOverlayMode.None;
 
         public BounceGame()
         {
@@ -158,7 +178,7 @@ namespace Bounce
             mLightPositions[1] = new Vector3(1865, 121, -21);
             mLightPositions[2] = new Vector3(0, 20, 00);
 
-            mLightRotationY = 0.0f;
+            mLightRotationY = (float)Math.PI / 180.0f * 25.0f;
 
             // init player position and orientation to sensitive defaults
             mPlayer.position = new Vector3(0, 10, 0);
@@ -166,9 +186,12 @@ namespace Bounce
             mPlayer.rotationY = -1.6057024f;
 
             mSpherePositionBuffer = new Matrix[MaximumSimulatedSpheres];
-            mOverlay = new Overlay();
 
-            mCollidingFacesBuffer = new Dictionary<Face, uint>();
+            mOverlay = new Overlay();
+            mOverlay.showShadowSplits = mArena.renderShadowSplitIndex;
+            mOverlay.virtualCameraMode = mVirtualCameraMode;
+            mOverlay.shadowOverlayMode = mShadowMapOverlay;
+
         }
 
 
@@ -178,43 +201,50 @@ namespace Bounce
         /// </summary>
         protected override void LoadContent()
         {
-        
             mArena.loadContent(Content, mGraphicsManager);
             mRenderer.loadContent(Content, mGraphicsManager, mArena.CollisionData.geometry);
 
-            // load bouncing sphere and apply instancing shader
-            mSphereModel = Content.Load<Model>("Models/soccer_ball_232_tris");
-            var instancingShader = Content.Load<Effect>("Effects/InstancingShader");
-            foreach (ModelMesh mesh in mSphereModel.Meshes)
+            mArena.initShaders();
+
+            // load bouncing sphere model and apply instancing shader
             {
-                foreach (ModelMeshPart part in mesh.MeshParts)
+                Effect instancingShader = Content.Load<Effect>("Effects/InstancingShader");
+                mSphere = Content.Load<BounceModel.BounceModel>("Models/soccer_ball_232_tris");
+
+                foreach (ModelMeshPart part in mSphere.model.Meshes.SelectMany(m => m.MeshParts))
                 {
-                    BasicEffect basicEffect = (BasicEffect)part.Effect;
+                    BasicEffect basicEffect = part.Effect as BasicEffect;
                     part.Effect = instancingShader.Clone();
                     part.Effect.Parameters["Texture"].SetValue(basicEffect.Texture);
-                    part.Effect.Parameters["LightPosition"].SetValue(new Vector3(100, 130, 0));
-                    part.Effect.Parameters["LightDirection"].SetValue(new Vector3(230.0f, 130.0f, 0f));
                     part.Effect.Parameters["LightColor"].SetValue(new Vector4(1f, 1f, 1f, 1.0f));
                     part.Effect.Parameters["AmbientLightColor"].SetValue(new Vector4(0.2f, 0.2f, 0.2f, 1.0f));
-                    part.Effect.Parameters["MaterialColor"].SetValue(new Vector4(0.5f, 0.5f, 0.5f, 1.0f));
-
+                    part.Effect.Parameters["MaterialColor"].SetValue(new Vector4(0.65f, 0.0f, 0.0f, 1.0f));
                     part.Effect.Parameters["Shininess"].SetValue(0.1f);
+                    part.Effect.Parameters["PoissonKernel"].SetValue(mRenderer.poissonKernel);
+                    part.Effect.Parameters["RandomTexture3D"].SetValue(mRenderer.randomTexture3D);
+                    part.Effect.Parameters["RandomTexture2D"].SetValue(mRenderer.randomTexture3D);
                     part.Effect.Parameters["SpecularPower"].SetValue(4.0f);
-
                     part.Effect.CurrentTechnique = part.Effect.Techniques["Light"];
+                }
+
+
+                foreach (var eff in mSphere.shadowModel.Meshes.SelectMany(m => m.Effects))
+                {
+                    eff.CurrentTechnique = eff.Techniques["ShadowInstanced"];
                 }
             }
 
             // load skybox and apply skybox shader
-            mSkyBox = Content.Load<Model>("Models/sky_box");
-            var envSphereShader = Content.Load<Effect>("Effects/SkyBoxShader");
-            foreach (ModelMesh mesh in mSkyBox.Meshes)
             {
-                foreach (ModelMeshPart part in mesh.MeshParts)
+                mSkyBox = Content.Load<Model>("Models/sky_box");
+                Effect envSphereShader = Content.Load<Effect>("Effects/SkyBoxShader");
+
+                foreach (var part in mSkyBox.Meshes.SelectMany(m => m.MeshParts))
                 {
                     BasicEffect e = (BasicEffect)part.Effect;
                     part.Effect = envSphereShader.Clone();
                     part.Effect.Parameters["Texture"].SetValue(e.Texture);
+
                 }
             }
 
@@ -247,6 +277,7 @@ namespace Bounce
             mAverageCollisionTime = 0;
             mAveragePhysicsTime = 0;
             mNumTicksInCurrentAverage = 0;
+
         }
 
 
@@ -259,6 +290,14 @@ namespace Bounce
         {
             // get input first
             gatherInput();
+
+            if (keyboardInput.IsKeyDown(Keys.B) && !previousKeyboardInput.IsKeyDown(Keys.B))
+            {
+                mBlockInput = !mBlockInput;
+            }
+
+            if (mBlockInput)
+                return;
 
             // move player and handle player arena collisions
             Vector3 prevPlayerPosition = mPlayer.position;
@@ -277,33 +316,35 @@ namespace Bounce
             }
 
             // check for other keys pressed on keyboard
-            if (keyboardInput.IsKeyDown(Keys.N) && !previousKeyboardInput.IsKeyDown(Keys.N))
-            {
-                mArena.normalMapping = !mArena.normalMapping;
-                mOverlay.normalMappingEnabled = mArena.normalMapping;
-            }
             if (keyboardInput.IsKeyDown(Keys.T) && !previousKeyboardInput.IsKeyDown(Keys.T))
             {
-                mArena.noTextures = !mArena.noTextures;
-                mOverlay.texturesEnabled = !mArena.noTextures;
+                mArena.renderShadowSplitIndex = !mArena.renderShadowSplitIndex;
+                mOverlay.showShadowSplits = mArena.renderShadowSplitIndex;
+               
             }
-            if (keyboardInput.IsKeyDown(Keys.C) && !previousKeyboardInput.IsKeyDown(Keys.C))
+            if (keyboardInput.IsKeyDown(Keys.R) && !previousKeyboardInput.IsKeyDown(Keys.R))
             {
-                mOverlay.drawCollidingTriangles = !mOverlay.drawCollidingTriangles;
+                mRenderer.mSnapShadowMaps = !mRenderer.mSnapShadowMaps;
             }
-            if (keyboardInput.IsKeyDown(Keys.G) && !previousKeyboardInput.IsKeyDown(Keys.G))
+            if (keyboardInput.IsKeyDown(Keys.X) && !previousKeyboardInput.IsKeyDown(Keys.X))
             {
-                mOverlay.drawCollisionGeometry = !mOverlay.drawCollisionGeometry;
+                int virtualCameraMode = ((int)mVirtualCameraMode + 1) % Enum.GetValues(typeof(VirtualCameraMode)).Length;
+                mVirtualCameraMode = (VirtualCameraMode)virtualCameraMode;
+                mOverlay.virtualCameraMode = mVirtualCameraMode;
             }
 
-            if (keyboardInput.IsKeyDown(Keys.L) && !previousKeyboardInput.IsKeyDown(Keys.L))
+            if (keyboardInput.IsKeyDown(Keys.E) && !previousKeyboardInput.IsKeyDown(Keys.E))
             {
-                mCurrentLightPosition = (mCurrentLightPosition + 1) % ((uint)mLightPositions.Length);
-                mLightRotationY = 0;
+                 int overlayMode = ((int)mShadowMapOverlay + 1) % Enum.GetValues(typeof(Renderer.ShadowMapOverlayMode)).Length;
+                 mShadowMapOverlay = (Renderer.ShadowMapOverlayMode)overlayMode;
+                 mOverlay.shadowOverlayMode = mShadowMapOverlay;
             }
+            
 
             // update spheres simulation
             mSimulator.update(gameTime);
+            if(keyboardInput.IsKeyDown(Keys.V))
+                mVirtualCamera.update(gameTime, Vector3.Zero, Vector3.Forward, Vector3.Up);
 
             // update list of colliding faces
             foreach (Face f in mSimulator.collidingFaces.Keys)
@@ -315,8 +356,7 @@ namespace Bounce
             }
 
             // subtract 1 from remaining frames counter for each face. remove faces with counter 0
-            Face[] tmpBuffer = new Face[mCollidingFacesBuffer.Count];
-            mCollidingFacesBuffer.Keys.CopyTo(tmpBuffer, 0);
+            Face[] tmpBuffer = mCollidingFacesBuffer.Keys.ToArray();
 
             foreach (Face f in tmpBuffer)
             {
@@ -331,9 +371,9 @@ namespace Bounce
                 Exit();
 
             // rotate light
-            mLightRotationY += 0.0002f;
+            //mLightRotationY += 0.0002f;
             Vector3 curLightPos = Vector3.Transform(mLightPositions[mCurrentLightPosition], Matrix.CreateRotationY(mLightRotationY));
-            mRenderer.lightPosition = curLightPos;
+            mRenderer.setLightPosition(curLightPos, mArena);
 
             // update average timing data
             mAverageCollisionTime += mSimulator.timeCollisions;
@@ -354,6 +394,7 @@ namespace Bounce
             mOverlay.numSpheres = mSimulator.numSpheres;
             mOverlay.numCollisions = mSimulator.collidingFaces.Count;
             mOverlay.numTrianglesChecked = (mSimulator.numCollisionTests + 1) * mArena.CollisionData.geometry.faces.Length; // also count player level collisions
+            mOverlay.debugText = mRenderer.mSnapShadowMaps;
 
             // update UI
             mOverlay.update(gameTime);
@@ -364,24 +405,28 @@ namespace Bounce
         // reads keyboard and mouse input, sets mouse position to the origin (center of the window)
         private void gatherInput()
         {
-            // store previous input
-            mPreviousKeyboardInput = mKeyboardInput;
-            mPreviousMouseInput = mMouseInput;
+           
+                // store previous input
+                mPreviousKeyboardInput = mKeyboardInput;
+                mPreviousMouseInput = mMouseInput;
 
-            // get new input
-            mKeyboardInput = Keyboard.GetState();
-            mMouseInput = Mouse.GetState();
-            mMouseMovement = new Vector2(
-                mMouseInput.X - GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
-                mMouseInput.Y - GraphicsDevice.PresentationParameters.BackBufferHeight / 2
-                );
+                // get new input
+                mKeyboardInput = Keyboard.GetState();
+                mMouseInput = Mouse.GetState();
+                mMouseMovement = new Vector2(
+                    mMouseInput.X - GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
+                    mMouseInput.Y - GraphicsDevice.PresentationParameters.BackBufferHeight / 2
+                    );
 
-            // set mouse pos to center of window, in order to avoid getting stuck at edges of screen
-            Mouse.SetPosition(
-                GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
-                GraphicsDevice.PresentationParameters.BackBufferHeight / 2
-                );
-
+                // set mouse pos to center of window, in order to avoid getting stuck at edges of screen
+                if (!mBlockInput)
+                {
+                    Mouse.SetPosition(
+                        GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
+                        GraphicsDevice.PresentationParameters.BackBufferHeight / 2
+                        );
+                }
+         
         }
 
         // checks for player - level collisions, moves player out of colliding state if necessary
@@ -434,8 +479,6 @@ namespace Bounce
 
             // move player out of colliding state
             player.position += (-r - avgColVec);
-
-
         }
 
         /// <summary>
@@ -444,51 +487,88 @@ namespace Bounce
         /// <param name="gameTime">Provides a snapshot of timing values.</param>
         protected override void Draw(GameTime gameTime)
         {
-            mGraphicsManager.GraphicsDevice.Clear(ClearOptions.DepthBuffer | ClearOptions.Target, Color.CornflowerBlue, 1.0f, 0);
-
             // set up initial graphics states
             mGraphicsManager.GraphicsDevice.DepthStencilState = DepthStencilState.Default;
             mGraphicsManager.GraphicsDevice.BlendState = BlendState.Opaque;
 
-            // render environment sphere
+            // set instancing data on renderer
+            int numSpheres = 0;
+             mSimulator.getSpheres(ref mSpherePositionBuffer, ref numSpheres);
+            mRenderer.setInstancingData(mSpherePositionBuffer, numSpheres);  
+            
+            // determine shadow frustums
+            var shadowCamera = mVirtualCameraMode != VirtualCameraMode.None ? mVirtualCamera : mPlayer.camera;
+            mRenderer.setShadowTransforms(shadowCamera, mArena);
+
+            // render shadow maps first, then scene
+            DrawShadows(gameTime, shadowCamera, numSpheres);
+            DrawScene(gameTime, mPlayer.camera, numSpheres);
+
+            if (mShadowMapOverlay != Renderer.ShadowMapOverlayMode.None)
             {
-                foreach (var mesh in mSkyBox.Meshes)
-                {
-                    foreach (var effect in mesh.Effects)
-                    {
-                        effect.CurrentTechnique = effect.Techniques[mOverlay.drawCollisionGeometry ? "Black" : "TextureNoLight"];
-                    }
-                }
-
+                mRenderer.renderShadowMapOverlay(shadowCamera, mArena.shadowModel, mShadowMapOverlay);
             }
-            mRenderer.render(
-                mSkyBox,
-                Matrix.CreateRotationY(mLightRotationY),
-                Matrix.CreateTranslation(mPlayer.position),
-                mPlayer.camera
-           );
-
-
-            // render arena
-            if (!mOverlay.drawCollisionGeometry)
-                mRenderer.render(mArena.model, mPlayer.camera);
-            else
-                mRenderer.renderCollisionGeometry(mArena.CollisionData.geometry, mPlayer.camera);
-
-            // render simulated spheres
-            int num = 0;
-            mSimulator.getSpheres(ref mSpherePositionBuffer, ref num);
-            mRenderer.renderInstanced(mSphereModel, mPlayer.camera, mSpherePositionBuffer, num);
-
-            // render colliding faces
-            if (mOverlay.drawCollidingTriangles)
-                mRenderer.renderCollidingFaces(mArena.CollisionData.geometry, mCollidingFacesBuffer, mPlayer.camera, 0, mNumTicksCollidingFaceIsVisible);
 
             // render overlay
             mOverlay.framesPerSecond = 1000.0 / gameTime.ElapsedGameTime.TotalMilliseconds;
             mOverlay.draw();
 
             base.Draw(gameTime);
+        }
+
+        public void DrawShadows(GameTime gameTime, Camera camera, int numSpheres)
+        {
+            mRenderer.SetCurrentPass(Renderer.RenderPass.ShadowPass);
+            mRenderer.renderShadow(mArena.shadowModel, mSphere.shadowModel, numSpheres, camera);
+        }
+
+        public void DrawScene(GameTime gameTime, Camera camera, int numSpheres)
+        {
+            mRenderer.SetCurrentPass(Renderer.RenderPass.ColourPass);
+
+            // render environment sphere 
+            {
+                foreach (var effect in mSkyBox.Meshes.SelectMany(m => m.Effects))
+                {
+                    effect.CurrentTechnique = effect.Techniques[mOverlay.drawCollisionGeometry ? "Black" : "TextureNoLight"];
+                }
+
+                mRenderer.render(mSkyBox, Matrix.CreateRotationY(mLightRotationY), Matrix.CreateTranslation(mPlayer.position), camera);
+            }
+
+            // render arena 
+            if (!mOverlay.drawCollisionGeometry)
+            {
+                mRenderer.render(mArena.model, camera);
+            }
+            else
+            {
+                mRenderer.renderCollisionGeometry(mArena.CollisionData.geometry, camera);
+            }
+
+            // render spheres
+            mRenderer.renderInstanced(mSphere.model, camera, numSpheres);
+
+            // render colliding faces
+       //     if (mOverlay.drawCollidingTriangles)
+       //         mRenderer.renderCollidingFaces(mArena.CollisionData.geometry, mCollidingFacesBuffer, camera, 0, mNumTicksCollidingFaceIsVisible);
+
+            // render virtual camera
+            switch (mVirtualCameraMode)
+            {
+                case VirtualCameraMode.ShadowSplits:
+                    for (int i = 0; i < mRenderer.ShadowSplitProjections.Count(); ++i)
+                    {
+                        mRenderer.renderFrustum(mRenderer.ShadowSplitProjections[i], mRenderer.ShadowSplitColors[i], camera, 0.25f * i);
+                    }
+                    break;
+                case VirtualCameraMode.ViewFrustum:
+                    for (int i = 0; i < mRenderer.ViewFrustumSplits.Count(); ++i)
+                    {
+                        mRenderer.renderFrustum(mRenderer.ViewFrustumSplits[i], mRenderer.ShadowSplitColors[i], camera.viewMatrix * camera.projectionMatrix, 0.0f);
+                    }
+                    break;
+            }
         }
 
 

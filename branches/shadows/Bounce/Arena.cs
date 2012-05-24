@@ -12,7 +12,7 @@
 //                                                                                            //
 // Part of Portfolio projects, www.theomader.com                                              //
 //                                                                                            //
-// Copyright 2011. All rights reserved.                                                       //
+// Copyright 2012. All rights reserved.                                                       //
 // ========================================================================================== //
 
 
@@ -23,8 +23,10 @@ using System.Text;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Content;
+using System.Linq;
 
 using CollidableModel;
+using BounceModel;
 
 namespace Bounce
 {
@@ -38,7 +40,11 @@ namespace Bounce
         /// <summary>
         /// encapsulated Model
         /// </summary>
-        private CollidableModel.CollidableModel mData;
+        private BounceModel.BounceModel mData;
+        public BounceModel.BounceModel Data
+        {
+            get { return mData; }
+        }
 
         public Model model
         {
@@ -48,6 +54,11 @@ namespace Bounce
         public BspTree CollisionData
         {
             get { return mData.collisionData; }
+        }
+
+        public Model shadowModel
+        {
+            get { return mData.shadowModel; }
         }
 
         /// <summary>
@@ -60,6 +71,11 @@ namespace Bounce
             get { return mNormalMapping; }
         }
 
+        private BoundingSphere mBoundingSphere;
+        public BoundingSphere BoundingSphere
+        {
+            get { return mBoundingSphere; }
+        }
 
         /// <summary>
         /// Disable textures for rendering the arena?
@@ -71,7 +87,18 @@ namespace Bounce
             get { return mNoTextures; }
         }
 
-        public Arena() {
+        /// <summary>
+        /// Render shadow split index
+        /// </summary>
+        private bool mRenderShadowSplitIndex;
+        public bool renderShadowSplitIndex
+        {
+            set { mRenderShadowSplitIndex = value; updateTechnique(); }
+            get { return mRenderShadowSplitIndex; }
+        }
+
+        public Arena() 
+        {
             mNormalMapping = true;
             mNoTextures = false;
         }
@@ -86,26 +113,39 @@ namespace Bounce
         /// <param name="graphicsManager">Used to load the arena shader "Effects/ArenaShader"</param>
         public void loadContent(ContentManager contentManager, GraphicsDeviceManager graphicsManager)
         {
-            Effect shader = contentManager.Load<Effect>("Effects/ArenaShader");
-            mData = contentManager.Load<CollidableModel.CollidableModel>("Models/arena");
+            mData = contentManager.Load<BounceModel.BounceModel>("Models/arena");
 
-            // set lighting parameters for each shader
-            foreach (ModelMesh mesh in model.Meshes)
+            // compute bounding sphere
             {
-                foreach (ModelMeshPart part in mesh.MeshParts)
-                {
-                    part.Effect.Parameters["LightPosition"].SetValue(new Vector3(100, 130, 0));
-                   
-                    part.Effect.Parameters["LightColor"].SetValue(new Vector4(0.8f, 0.8f, 0.8f, 1.0f));
-                    part.Effect.Parameters["AmbientLightColor"].SetValue(new Vector4(0.2f, 0.2f, 0.2f, 1.0f));
+                var vertices = CollisionData.geometry.vertices.Where(v => v.Y > -50).ToArray();
+                var center = vertices.Aggregate((v1, v2) => v1 + v2);
+                center /= vertices.Length;
 
-                    part.Effect.Parameters["Shininess"].SetValue(0.01f);
-                    part.Effect.Parameters["SpecularPower"].SetValue(8.0f);
-
-                    part.Effect.CurrentTechnique = part.Effect.Techniques["LightTexturesNormalmaps"];
-                }
+                var radius = vertices.Max(v => (v - center).LengthSquared());
+                radius = (float)Math.Sqrt(radius);
+                mBoundingSphere = new BoundingSphere(center, radius);
             }
 
+        }
+        public void initShaders()
+        {
+            // set lighting parameters for each shader
+            foreach (var part in model.Meshes.SelectMany(m => m.MeshParts))
+            {
+                part.Effect.Parameters["LightDirection"].SetValue(Vector3.Normalize(new Vector3(100, 130, 0)));
+
+                part.Effect.Parameters["LightColor"].SetValue(new Vector4(0.8f, 0.8f, 0.8f, 1.0f));
+                part.Effect.Parameters["AmbientLightColor"].SetValue(new Vector4(0.2f, 0.2f, 0.2f, 1.0f));
+
+                part.Effect.Parameters["Shininess"].SetValue(0.01f);
+                part.Effect.Parameters["SpecularPower"].SetValue(8.0f);
+
+                part.Effect.Parameters["PoissonKernel"].SetValue(Program.Game.renderer.poissonKernel);
+                part.Effect.Parameters["RandomTexture3D"].SetValue(Program.Game.renderer.randomTexture3D);
+                part.Effect.Parameters["RandomTexture2D"].SetValue(Program.Game.renderer.randomTexture3D);
+                part.Effect.CurrentTechnique = part.Effect.Techniques["LightTexturesNormalmaps"];
+            }
+            
         }
 
         /// <summary>
@@ -116,21 +156,17 @@ namespace Bounce
         {
             string technique;
 
-            if (mNormalMapping)
+            if (mRenderShadowSplitIndex)
             {
-                technique = mNoTextures ? "LightNormalmaps" : "LightTexturesNormalmaps";
+                technique = "ShadowSplitIndex";
             }
             else
             {
-                technique = mNoTextures ? "Light" : "LightTextures";
+                technique ="LightTexturesNormalmaps";
             }
-
-            foreach (ModelMesh mesh in model.Meshes)
+            foreach (var part in model.Meshes.SelectMany(m => m.MeshParts))
             {
-                foreach (ModelMeshPart part in mesh.MeshParts)
-                {
-                    part.Effect.CurrentTechnique = part.Effect.Techniques[technique];
-                }
+                part.Effect.CurrentTechnique = part.Effect.Techniques[technique];               
             }
         }    
     }
