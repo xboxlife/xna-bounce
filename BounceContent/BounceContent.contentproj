@@ -70,9 +70,8 @@
     <Compile Include="Models\arena.fbx">
       <Name>arena</Name>
       <Importer>FbxImporter</Importer>
-      <Processor>CollidableModelProcessor</Processor>
-      <ProcessorParameters_ModelProcessor>NormalMappingModelProcessor</ProcessorParameters_ModelProcessor>
-      <ProcessorParameters_AddVisualizationData>True</ProcessorParameters_AddVisualizationData>
+      <Processor>BounceModelProcessor</Processor>
+      <ProcessorParameters_GeometryProcessor>NormalMappingModelProcessor</ProcessorParameters_GeometryProcessor>
     </Compile>
     <Compile Include="Models\sky_box.fbx">
       <Name>sky_box</Name>
@@ -82,10 +81,14 @@
     <Compile Include="Models\soccer_ball_232_tris.fbx">
       <Name>soccer_ball_232_tris</Name>
       <Importer>FbxImporter</Importer>
-      <Processor>ModelProcessor</Processor>
+      <Processor>BounceModelProcessor</Processor>
     </Compile>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\BounceModelProcessor\BounceModelProcessor.csproj">
+      <Project>{8791B6BE-6792-4270-9812-B4C99405FAAC}</Project>
+      <Name>BounceModelProcessor</Name>
+    </ProjectReference>
     <ProjectReference Include="..\NormalMapProcessor\NormalMapProcessor.csproj">
       <Project>{D3284E85-FE4A-4BFB-ADDA-4A759C5C1719}</Project>
       <Name>NormalMapProcessor</Name>
@@ -97,6 +100,21 @@
       <Importer>FontDescriptionImporter</Importer>
       <Processor>FontDescriptionProcessor</Processor>
     </Compile>
+    <None Include="Effects\ShadowMapShader.fx">
+      <Name>ShadowMapShader</Name>
+      <Importer>EffectImporter</Importer>
+      <Processor>EffectProcessor</Processor>
+    </None>
+    <Compile Include="Effects\DebugShader.fx">
+      <Name>DebugShader</Name>
+      <Importer>EffectImporter</Importer>
+      <Processor>EffectProcessor</Processor>
+    </Compile>
+    <None Include="Effects\Shadow.h">
+      <Name>Shadow</Name>
+      <Importer>EffectImporter</Importer>
+      <Processor>EffectProcessor</Processor>
+    </None>
     <Compile Include="UI_Font.spritefont">
       <Name>UI_Font</Name>
       <Importer>FontDescriptionImporter</Importer>

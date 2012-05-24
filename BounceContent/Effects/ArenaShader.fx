@@ -1,9 +1,11 @@
+#include "Shadow.h"
+
 float4x4 World;
 float4x4 View;
 float4x4 Projection;
 
 // ***** Light properties *****
-float3 LightPosition;
+float3 LightDirection;
 float4 AmbientLightColor;
 float4 LightColor;
 
@@ -15,7 +17,7 @@ float Shininess;
 float SpecularPower;
 // *******************************
 
-uniform texture2D Texture;
+texture2D Texture;
 sampler TextureSampler = sampler_state
 {
 	texture = <Texture>;
@@ -38,9 +40,6 @@ sampler NormalMapSampler = sampler_state
 	AddressV  = wrap;
 };
 
-
-// TODO: add effect parameters here.
-
 struct VertexShaderInput
 {
     float4 Position			: POSITION0;
@@ -54,11 +53,16 @@ struct VertexShaderOutput
 {
     float4 Position			: POSITION0;
     float2 TexCoord			: TEXCOORD0;
-    float3 LightDirection   : TEXCOORD1;
     float3 ViewDirection    : TEXCOORD2;
-    float3x3 TangentToWorld : TEXCOORD3;
-    float3 Normal			: COLOR0;
+
+	float3 Tangent			: TANGENT;
+	float3 Binormal			: BINORMAL;
+    float3 Normal			: NORMAL;
+
+	ShadowData Shadow		: TEXCOORD3;
 };
+
+
 
 VertexShaderOutput ArenaVertexShader(VertexShaderInput input)
 {
@@ -67,45 +71,33 @@ VertexShaderOutput ArenaVertexShader(VertexShaderInput input)
     float4 worldPosition = mul(input.Position, World);
     float4 viewPosition = mul(worldPosition, View);
     output.Position = mul(viewPosition, Projection);
-    
-    output.Normal = mul( input.Normal, World );
-   
-	// calculate the light direction ( from the surface to the light ), which is not
-    // normalized and is in world space
-    output.LightDirection = LightPosition - worldPosition;
         
-    // similarly, calculate the view direction, from the eye to the surface.  not
+    // calculate the view direction, from the eye to the surface.  not
     // normalized, in world space.
     float3 eyePosition = mul(-View._m30_m31_m32, transpose(View));    
     output.ViewDirection = worldPosition - eyePosition;    
     
-    // calculate tangent space to world space matrix using the world space tangent,
-    // binormal, and normal as basis vectors.  the pixel shader will normalize these
-    // in case the world matrix has scaling.
-    output.TangentToWorld[0] = mul(input.Tangent, World);
-    output.TangentToWorld[1] = mul(input.Binormal, World);
-    output.TangentToWorld[2] = mul(input.Normal, World);
+    output.Tangent = mul(input.Tangent, World);
+    output.Binormal = mul(input.Binormal, World);
+    output.Normal = mul(input.Normal, World);
     
-    // pass the texture coordinate through without additional processing
     output.TexCoord = input.TexCoord;
-    
+	output.Shadow = GetShadowData( worldPosition, output.Position);
+ 
     return output;
 }
 
 float3 evaluateLightingEquation( float3 LightDirection, float3 ViewDirection, float3 Normal	)
 {
     ViewDirection = normalize( ViewDirection );
-    LightDirection = normalize( LightDirection );    
     Normal = normalize( Normal );
     
     // calculate phong diffuse light component
-    float nDotL = max( dot( Normal, LightDirection ), 0 );
+    float nDotL = saturate( dot( Normal, LightDirection ) );
     
-    // use phong to calculate specular highlights: reflect the incoming light
-    // vector off the normal, and use a dot product to see how "similar"
-    // the reflected vector is to the view vector.    
+	// TODO: use half-vector for specular 
     float3 reflectedLight = reflect( LightDirection, Normal );
-    float rDotV = max( dot( reflectedLight, ViewDirection ), 0.00001 ); // use small epsilon instead of 0 to work around compiler error: "Nan and infinity literals not allowed by shader model"
+    float rDotV = saturate (dot( reflectedLight, ViewDirection ) ); 
     float specular = Shininess * pow( rDotV, SpecularPower );
     
     return float3( 1, nDotL, specular );
@@ -113,63 +105,66 @@ float3 evaluateLightingEquation( float3 LightDirection, float3 ViewDirection, fl
 
 float4 NormalMappingPS(VertexShaderOutput input) : COLOR0
 {
-	// look up the normal from the normal map, and transform from tangent space
-    // into world space using the matrix created above.  normalize the result
-    // in case the matrix contains scaling.
     float3 normalFromMap = tex2D(NormalMapSampler, input.TexCoord);
-    normalFromMap = mul(normalFromMap, input.TangentToWorld);
+    normalFromMap = normalFromMap.x * input.Tangent + normalFromMap.y * input.Binormal + normalFromMap.z * input.Normal;
 
 	float4 texColor = tex2D(TextureSampler, input.TexCoord);
-
-	float3 lightCoeffs = evaluateLightingEquation( input.LightDirection, input.ViewDirection, normalFromMap ); 
+	float3 lightCoeffs = evaluateLightingEquation( LightDirection, input.ViewDirection, normalFromMap ); 
 	
 	float4 ambient = AmbientLightColor * lightCoeffs.x;
 	float4 diffuse = LightColor * lightCoeffs.y;
 	float4 specular = LightColor * lightCoeffs.z;
-	
-	return EmissiveColor + (ambient + diffuse) * texColor + specular;
+
+	float shadow =  GetShadowFactor( input.Shadow, lightCoeffs.y );
+	return EmissiveColor + (ambient + diffuse * shadow) * texColor + specular*shadow;
+
 }
 
 float4 NormalMappingNoTexturePS(VertexShaderOutput input) : COLOR0
 {
-	// look up the normal from the normal map, and transform from tangent space
-    // into world space using the matrix created above.  normalize the result
-    // in case the matrix contains scaling.
     float3 normalFromMap = tex2D(NormalMapSampler, input.TexCoord);
-    normalFromMap = mul(normalFromMap, input.TangentToWorld);
+    normalFromMap = normalFromMap.x * input.Tangent + normalFromMap.y * input.Binormal + normalFromMap.z * input.Normal;
 
-	float3 lightCoeffs = evaluateLightingEquation( input.LightDirection, input.ViewDirection, normalFromMap ); 
+	float3 lightCoeffs = evaluateLightingEquation( LightDirection, input.ViewDirection, normalFromMap ); 
 	
 	float4 ambient = AmbientLightColor * lightCoeffs.x;
 	float4 diffuse = LightColor * lightCoeffs.y;
 	float4 specular = LightColor * lightCoeffs.z;
 	
-	return EmissiveColor + (ambient + diffuse) * float4( 1, 1, 1, 1 ) + specular;
+	float shadow =  GetShadowFactor( input.Shadow, lightCoeffs.y );
+	return EmissiveColor + (ambient + diffuse * shadow) * float4( 1, 1, 1, 1 ) + specular * shadow;
 
+}
+
+float4 SplitIndexAsColorPS(VertexShaderOutput input) : COLOR0
+{
+	float3 lightCoeffs = evaluateLightingEquation( LightDirection, input.ViewDirection, input.Normal ); 
+	return GetSplitIndexColor( input.Shadow ) * GetShadowFactor( input.Shadow, lightCoeffs.y );
 }
 
 float4 StandardPS(VertexShaderOutput input) : COLOR0
 {
-	float3 lightCoeffs = evaluateLightingEquation( input.LightDirection, input.ViewDirection, input.Normal ); 
+	float3 lightCoeffs = evaluateLightingEquation( LightDirection, input.ViewDirection, input.Normal ); 
 	float4 texColor = tex2D(TextureSampler, input.TexCoord);
 	
 	float4 ambient = AmbientLightColor * lightCoeffs.x;
 	float4 diffuse = LightColor * lightCoeffs.y;
 	float4 specular = LightColor * lightCoeffs.z;
 	
-	
-	return EmissiveColor + (ambient + diffuse) * texColor + specular;
+	float shadow =  GetShadowFactor( input.Shadow, lightCoeffs.y );
+	return EmissiveColor + (ambient + diffuse * shadow) * texColor + specular * shadow;
 }
 
 float4 StandardNoTexturePS(VertexShaderOutput input) : COLOR0
 {
-	float3 lightCoeffs = evaluateLightingEquation( input.LightDirection, input.ViewDirection, input.Normal ); 
-		
+	float3 lightCoeffs = evaluateLightingEquation( LightDirection, input.ViewDirection, input.Normal ); 
+
 	float4 ambient = AmbientLightColor * lightCoeffs.x;
 	float4 diffuse = LightColor * lightCoeffs.y;
 	float4 specular = LightColor * lightCoeffs.z;
 	
-	return EmissiveColor + (ambient + diffuse) * float4( 1, 1, 1, 1 ) + specular;
+	float shadow =  GetShadowFactor( input.Shadow, lightCoeffs.y );
+	return EmissiveColor + (ambient + diffuse* shadow) * float4( 1, 1, 1, 1 ) + specular*shadow;
 }
 
 
@@ -177,8 +172,8 @@ technique LightTexturesNormalmaps
 {
     pass Pass1
     {
-		VertexShader = compile vs_1_1 ArenaVertexShader();
-        PixelShader = compile ps_2_0 NormalMappingPS();
+		VertexShader = compile vs_3_0 ArenaVertexShader();
+        PixelShader = compile ps_3_0 NormalMappingPS();
     }
 }
 
@@ -186,8 +181,8 @@ technique LightTextures
 {
     pass Pass1
     {
-		VertexShader = compile vs_1_1 ArenaVertexShader();
-        PixelShader = compile ps_2_0 StandardPS();
+		VertexShader = compile vs_3_0 ArenaVertexShader();
+        PixelShader = compile ps_3_0 StandardPS();
     }
 }
 
@@ -195,8 +190,8 @@ technique LightNormalmaps
 {
     pass Pass1
     {
-		VertexShader = compile vs_1_1 ArenaVertexShader();
-        PixelShader = compile ps_2_0 NormalMappingNoTexturePS();
+		VertexShader = compile vs_3_0 ArenaVertexShader();
+        PixelShader = compile ps_3_0 NormalMappingNoTexturePS();
     }
 }
 
@@ -204,9 +199,17 @@ technique Light
 {
     pass Pass1
     {
-		VertexShader = compile vs_1_1 ArenaVertexShader();
-        PixelShader = compile ps_2_0 StandardNoTexturePS();
+		VertexShader = compile vs_3_0 ArenaVertexShader();
+        PixelShader = compile ps_3_0 StandardNoTexturePS();
     }
 }
 
+technique ShadowSplitIndex
+{
+    pass Pass1
+    {
+		VertexShader = compile vs_3_0 ArenaVertexShader();
+        PixelShader = compile ps_3_0 SplitIndexAsColorPS();
+    }
+}
 

@@ -12,7 +12,7 @@
 //                                                                                            //
 // Part of Portfolio projects, www.theomader.com                                              //
 //                                                                                            //
-// Copyright 2011. All rights reserved.                                                       //
+// Copyright 2012. All rights reserved.                                                       //
 // ========================================================================================== //
 
 
@@ -34,12 +34,14 @@ namespace Bounce
         public Matrix viewMatrix
         {
             get { return mViewMatrix; }
+            set { mViewMatrix = value; }
         }
 
         private Matrix mProjectionMatrix;
         public Matrix projectionMatrix
         {
             get { return mProjectionMatrix; }
+            set { mProjectionMatrix = value; }
         }
 
         private float mFieldOfView;
@@ -76,7 +78,7 @@ namespace Bounce
             // initialize with reasonable values
             mFieldOfView = MathHelper.ToRadians(45.0f);
             mAspectRatio = 800.0f / 600.0f;
-            mNearPlane = 1.0f;
+            mNearPlane = 0.25f;// 1.0f;
             mFarPlane = 10000.0f;
 
 
@@ -91,9 +93,33 @@ namespace Bounce
 
 
 
-        public void update(GameTime time, Vector3 playerPos, Vector3 playerLookAt, Vector3 playerUp)
+        public virtual void update(GameTime time, Vector3 playerPos, Vector3 playerLookAt, Vector3 playerUp)
         {
             mViewMatrix = Matrix.CreateLookAt(playerPos, playerLookAt, playerUp);
+        }
+    }
+
+    public class VirtualCamera : Camera
+    {
+        Matrix mView;
+        float mRotationY = 0.0f;
+
+        public VirtualCamera()
+        {
+            mView = new Matrix(
+                0.999263f, 0.00147375371f, -0.038360253f, 0.0f,
+                0.0000000126671047f, 0.999262869f, 0.03839077f, 0.0f,
+                 0.0383885577f, -0.038362477f, 0.9985262f, 0.0f,
+                -37.09832f, -76.10451f, -291.163971f, 1.0f
+             );
+
+            viewMatrix = mView;
+        }
+
+        public override void update(GameTime time, Vector3 playerPos, Vector3 playerLookAt, Vector3 playerUp)
+        {
+            mRotationY += time.ElapsedGameTime.Milliseconds * 0.001f;
+            viewMatrix = Matrix.CreateRotationY(mRotationY) * mView;
         }
     }
 }

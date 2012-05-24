@@ -1,9 +1,10 @@
+#include "Shadow.h"
+
 float4x4 World;
 float4x4 View;
 float4x4 Projection;
 
 // ***** Light properties *****
-float3 LightPosition;
 float4 LightColor;
 float4 AmbientLightColor;
 float4 MaterialColor;
@@ -45,6 +46,7 @@ struct VertexShaderOutput
 {
     float4 Position			: POSITION0;
     float4 Color			: COLOR0;
+	ShadowData Shadow		: TEXCOORD0;
 };
 
 VertexShaderOutput VertexShaderFunction(VertexShaderInput input, float4x4 worldTransform)
@@ -54,10 +56,6 @@ VertexShaderOutput VertexShaderFunction(VertexShaderInput input, float4x4 worldT
     float4 worldPosition = mul(input.Position, worldTransform);
     float4 viewPosition = mul(worldPosition, View);
     output.Position = mul(viewPosition, Projection);
-
-	// calculate the light direction ( from the surface to the light ), which is not
-    // normalized and is in world space
-    float3 LightDirection = normalize( worldPosition - LightPosition );
     float3 Normal = mul( input.Normal, worldTransform );
     
     // similarly, calculate the view direction, from the eye to the surface.  not
@@ -69,24 +67,25 @@ VertexShaderOutput VertexShaderFunction(VertexShaderInput input, float4x4 worldT
 	float3 halfwayVector = normalize( (normalize(-LightDirection) + ViewDirection) );
 	
 	// evaluate lighting equation
-	float n_dot_l = dot( Normal, -LightDirection );
+	float n_dot_l = dot( Normal, LightDirection );
 	float n_dot_h = dot( Normal, halfwayVector );
 	float4 coeffs = lit( n_dot_l, n_dot_h, SpecularPower );
 	
 	coeffs.z *= Shininess;
 	    
-	output.Color = (0.8 * coeffs.y + AmbientLightColor) * MaterialColor + 0.33* coeffs.z;
-	
+	output.Color = 0.8 * coeffs.y * MaterialColor + 0.33* coeffs.z +  AmbientLightColor * MaterialColor;
+	output.Shadow = GetShadowData( worldPosition, output.Position );
     return output;
 }
 
-float4 PixelShaderFunction(VertexShaderOutput input) : COLOR0
+float4 PixelShaderFunction(VertexShaderOutput input, float2 vpos : VPOS) : COLOR0
 {
-    return input.Color;
+	float shadow = GetShadowFactor( input.Shadow );
+    return input.Color * saturate(shadow );
 }
 
 // On Windows shader 3.0 cards, we can use hardware instancing, reading
-// the per-instance world transform directly from a secondary vertex stream.
+// the per-instance world transform directly from a secondary vertex stream
 VertexShaderOutput InstancedVertexShader( VertexShaderInput input,
                                                 float4x4 instanceTransform : TEXCOORD2)
 {
