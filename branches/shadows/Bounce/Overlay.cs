@@ -176,8 +176,8 @@ namespace Bounce
         }
 
 
-        private Renderer.ShadowMapOverlayMode mShadowOverlayMode;
-        public Renderer.ShadowMapOverlayMode shadowOverlayMode
+        private BounceGame.ShadowMapOverlayMode mShadowOverlayMode;
+        public BounceGame.ShadowMapOverlayMode shadowOverlayMode
         {
             get { return mShadowOverlayMode; }
             set

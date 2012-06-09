@@ -51,8 +51,12 @@ namespace Bounce
 
         VertexBuffer mCollidingFacesVertices;    // Vertex buffer for colliding faces
         VertexDeclaration mCollidingFacesVertexDeclaration;
+        VertexDeclaration mGridVertexDeclaration;
 
         VertexBuffer mDebugVertices;            // Vertex buffer for drawing debug primitives
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+        VertexBuffer mGridVertices;
+#endif
 
         Effect mCollisionsShader;   // shader used for drawing colliding triangles
         Effect mDebugShader;        // used for rendering geometric primitives for debugging
@@ -60,7 +64,7 @@ namespace Bounce
         BlendState mAlphaBlendState;
 
         RenderTarget2D mShadowMap;
-        RenderTarget2D mBlurTarget;
+        RenderTarget2D mBlockTexture;
 
         Matrix mShadowView;
         Matrix mShadowProjection;
@@ -70,6 +74,8 @@ namespace Bounce
 
         const int mNumShadowSplits = 4;
         public bool mSnapShadowMaps = true;
+
+        const int MaxSupportedPrimitivesPerDraw = 1048575;
 
         public Matrix ShadowView
         {
@@ -81,6 +87,7 @@ namespace Bounce
             get { return mShadowProjection; }
         }
 
+        public Matrix[] ShadowProjections;
         public Matrix[] ShadowSplitProjections;
         public Matrix[] ShadowSplitProjectionsWithTiling;
         public Vector4[] ShadowSplitTileBounds;
@@ -93,15 +100,6 @@ namespace Bounce
             new Color(0, 255, 0, 92),
             new Color(0, 0, 255, 92),
             new Color(255, 255, 0, 92)
-        };
-
-        public enum ShadowMapOverlayMode
-        {
-            None,
-            ShadowFrustums,
-            ShadowMap,
-            ShadowMapAndViewFrustum
-            
         };
 
         float[,] ShadowDepthBias = 
@@ -118,11 +116,16 @@ namespace Bounce
             get
             {
                return GeometryHelper.poissonKernel()
-                   .Select(v => v / 512.0f)
+                   .Select(v => v / (float)ShadowMapSize)
                    .OrderBy(v => v.Length())
                    .ToArray();
            }
         }
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+         public const int ShadowMapSize = 256;
+#else
+        public const int ShadowMapSize = 512;
+#endif
 
         Texture3D mRandomTexture3D;
         public Texture3D randomTexture3D
@@ -155,7 +158,7 @@ namespace Bounce
                     -look.X,        -look.Y,        -look.Z,        0,
                     mLightPosition.X, mLightPosition.Y, mLightPosition.Z, 1
                 )
-            ); 
+            );
 
             // bounding box
             {
@@ -217,7 +220,7 @@ namespace Bounce
 
                     // range is slightly too small, so add in some padding
                     float padding = 5.0f;
-                    var quantizationStep = (range + padding) / 512.0f;
+                    var quantizationStep = (range + padding) / (float)ShadowMapSize;
 
                     var x = GeometryHelper.determineShadowMinMax1D(frustumCorners.Select(v => v.X), cameraPosition.X, range);
                     var y = GeometryHelper.determineShadowMinMax1D(frustumCorners.Select(v => v.Y), cameraPosition.Y, range);
@@ -250,13 +253,8 @@ namespace Bounce
                     int tileX = i % 2;
                     int tileY = i / 2;
 
-                    var tileTransform = Matrix.Identity;
-                    tileTransform.M11 = 0.5f;
-                    tileTransform.M22 = 0.5f;
-                    tileTransform.Translation = new Vector3(tileX * 0.5f, tileY * 0.5f, 0);
-
                     // [x min, x max, y min, y max]
-                    float tileBorder = 3.0f / 512.0f;
+                    float tileBorder = 3.0f / (float)ShadowMapSize;
                     var tileBounds = new Vector4(
                         0.5f * tileX + tileBorder,
                         0.5f * tileX + 0.5f - tileBorder,
@@ -264,17 +262,17 @@ namespace Bounce
                         0.5f * tileY + 0.5f - tileBorder
                     );
 
-                    var textureMatrix = Matrix.Identity;
-                    textureMatrix.M11 = 0.5f;
-                    textureMatrix.M22 = -0.5f;
-                    textureMatrix.Translation = new Vector3(0.5f, 0.5f, 0.0f);
+                    var tileMatrix = Matrix.Identity;
+                    tileMatrix.M11 = 0.25f;
+                    tileMatrix.M22 = -0.25f;
+                    tileMatrix.Translation = new Vector3(0.25f + tileX * 0.5f, 0.25f + tileY * 0.5f, 0);
 
                     return new
                     {
                         Distance = f,
                         ViewFrustum = viewSplit,
                         Projection = Matrix.CreateOrthographicOffCenter(projectionMin.X, projectionMax.X, projectionMin.Y, projectionMax.Y, projectionMin.Z, projectionMax.Z),
-                        TileTransform = textureMatrix * tileTransform,
+                        TileTransform = tileMatrix,
                         TileBounds = tileBounds,
                     };
                 }).ToArray();
@@ -283,6 +281,7 @@ namespace Bounce
             ShadowSplitProjections = splitData.Select(s => ShadowView * s.Projection).ToArray();
             ShadowSplitProjectionsWithTiling = splitData.Select(s => ShadowView * s.Projection * s.TileTransform).ToArray();
             ShadowSplitTileBounds = splitData.Select(s => s.TileBounds).ToArray();
+            ShadowProjections = splitData.Select(s => s.Projection).ToArray();
         }
 
         public void  loadContent(ContentManager contentManager, GraphicsDeviceManager graphicsManager, ModelGeometry collisionGeometry)
@@ -305,9 +304,19 @@ namespace Bounce
                 new VertexElement(24, VertexElementFormat.Vector3, VertexElementUsage.Color, 0 ) 
             });
 
+            mGridVertexDeclaration = new VertexDeclaration(new[] 
+            { 
+                new VertexElement(0, VertexElementFormat.Vector4, VertexElementUsage.Position, 0)
+            });
+
             mCollidingFacesVertices = new VertexBuffer(mGraphicsDevice, mCollidingFacesVertexDeclaration, collisionGeometry.faces.Length * 3, BufferUsage.WriteOnly);
             mDebugVertices = new VertexBuffer(mGraphicsDevice, VertexPositionColorTexture.VertexDeclaration, 1024, BufferUsage.WriteOnly);
 
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+            var gridVertices =  GeometryHelper.normalizedGridVertices(ShadowMapSize, ShadowMapSize).ToArray();
+            mGridVertices = new VertexBuffer(mGraphicsDevice, mGridVertexDeclaration, gridVertices.Length, BufferUsage.WriteOnly);
+            mGridVertices.SetData(gridVertices);
+#endif
             // load collisions shader and configure material properties
             mCollisionsShader = contentManager.Load<Effect>("Effects/CollisionsShader");
             mCollisionsShader.Parameters["MaterialColor"].SetValue(new Vector3(0.39f, 0.8f, 1f));
@@ -320,7 +329,9 @@ namespace Bounce
             mAlphaBlendState.ColorDestinationBlend = Blend.InverseSourceAlpha;
             mAlphaBlendState.AlphaDestinationBlend = Blend.InverseSourceAlpha;
 
-            mShadowMap = new RenderTarget2D(mGraphicsDevice, 1024, 1024, false, SurfaceFormat.Single, DepthFormat.Depth24);
+            mShadowMap = new RenderTarget2D(mGraphicsDevice, ShadowMapSize * 2, ShadowMapSize*2, false, SurfaceFormat.Single, DepthFormat.Depth24);
+            mBlockTexture = new RenderTarget2D(mGraphicsDevice, ShadowMapSize * 2, ShadowMapSize * 2, false, SurfaceFormat.Single, DepthFormat.Depth24);
+
             mRandomTexture3D = new Texture3D(mGraphicsDevice, 32, 32, 32, false, SurfaceFormat.Rg32);
             mRandomTexture2D = new Texture2D(mGraphicsDevice, 128, 128, false, SurfaceFormat.Rg32);
 
@@ -334,7 +345,7 @@ namespace Bounce
                         .SelectMany(r => new[]{ Math.Cos(r), Math.Sin(r) })
                         .Select( v => (UInt16)((v*0.5+0.5) * UInt16.MaxValue));
                 };
-
+            fillTextureWithBlockPattern(mBlockTexture, 32);
             mRandomTexture3D.SetData(randomRotations(mRandomTexture3D.Width * mRandomTexture3D.Height * mRandomTexture3D.Depth).ToArray());
             mRandomTexture2D.SetData(randomRotations(mRandomTexture2D.Width * mRandomTexture2D.Height).ToArray());
          }
@@ -424,21 +435,18 @@ namespace Bounce
 
         public void renderShadow(Model arena, Model sphere, int numInstances, Camera camera)
         {
-
             Matrix[] transforms = new Matrix[arena.Bones.Count];
             arena.CopyAbsoluteBoneTransformsTo(transforms);
-
-            mGraphicsDevice.SetRenderTarget(mShadowMap);
 
             for (int i = 0; i < mNumShadowSplits; ++i)
             {
                 {
                     int x = i % 2;
                     int y = i / 2;
-                    var viewPort = new Viewport(x * 512, y * 512, 512, 512);
+                    var viewPort = new Viewport(x * ShadowMapSize, y * ShadowMapSize, ShadowMapSize, ShadowMapSize);
 
                     mGraphicsDevice.Viewport = viewPort;
-                }   
+                }
 
                 // Draw the arena model first.
                 foreach (ModelMesh mesh in arena.Meshes)
@@ -454,7 +462,7 @@ namespace Bounce
                 }
 
                 // now render the spheres
-                if (numInstances>0)
+                if (numInstances > 0)
                 {
                     foreach (ModelMesh mesh in sphere.Meshes)
                     {
@@ -465,7 +473,7 @@ namespace Bounce
                             part.Effect.Parameters["World"].SetValue(transforms[mesh.ParentBone.Index]);
                             part.Effect.Parameters["DepthBias"].SetValue(new Vector2(ShadowDepthBias[i, 0], ShadowDepthBias[i, 1]));
                             part.Effect.CurrentTechnique.Passes[0].Apply();
-                           
+
                             // set vertex buffer
                             mGraphicsDevice.SetVertexBuffers(new[] 
                             {
@@ -478,7 +486,7 @@ namespace Bounce
                             mGraphicsDevice.DrawInstancedPrimitives(PrimitiveType.TriangleList, part.VertexOffset, 0, part.NumVertices, part.StartIndex, part.PrimitiveCount, numInstances);
                         }
                     }
-                }   
+                }
             }
         }
 
@@ -555,21 +563,6 @@ namespace Bounce
             }
         }
 
-        public void fillShadowMap()
-        { 
-            var data = new float[mShadowMap.Width*mShadowMap.Height];
-            for (int y = 0; y < mShadowMap.Height; ++y)
-            {
-                for (int x = 0; x < mShadowMap.Width; ++x)
-                {
-                    data[x+y*mShadowMap.Width] = (x+y) % 2;
-                }
-            }
-
-            mShadowMap.SetData<float>(data);
-        }
-
-
         public void renderCollisionGeometry(ModelGeometry collisionGeometry, Camera camera)
         {
             foreach (var mesh in collisionGeometry.visualizationData.Meshes)
@@ -588,7 +581,8 @@ namespace Bounce
         public void renderCube( Vector3[] corners, Color color, Matrix cameraMatrix )
         {
             mDebugShader.CurrentTechnique = mDebugShader.Techniques["Color"];
-            mDebugShader.Parameters["WorldViewProjection"].SetValue(cameraMatrix);
+            mDebugShader.Parameters["World"].SetValue(Matrix.Identity);
+            mDebugShader.Parameters["ViewProjection"].SetValue(cameraMatrix);
             mDebugShader.CurrentTechnique.Passes[0].Apply();
 
             renderCubePrimitives(corners, color);
@@ -596,32 +590,8 @@ namespace Bounce
 
         public void renderCubePrimitives(Vector3[] corners, Color color)
         {
-            var triangles = new[]
-            {
-                // front
-                corners[0], corners[1], corners[2],
-                corners[2], corners[3], corners[0],
-
-                // right
-                corners[6], corners[2], corners[1],
-                corners[1], corners[5], corners[6],
- 
-                 // bottom
-                corners[3], corners[2], corners[6],
-                corners[6], corners[7], corners[3],
-
-                 // back
-                corners[6], corners[5], corners[4],
-                corners[4], corners[7], corners[6],
-
-                 // left
-                 corners[0], corners[3], corners[7],
-                corners[7], corners[4], corners[0],
-
-                // top
-                corners[5], corners[1], corners[0],
-                corners[0], corners[4], corners[5],
-             };
+            // get triangle list
+            var triangles = GeometryHelper.cubeTriangleList(corners);
 
             // fill vertex buffer
             var data = triangles.Select(v => new VertexPositionColorTexture(v, color, Vector2.Zero));
@@ -660,7 +630,8 @@ namespace Bounce
 
             // set up shader
             mDebugShader.CurrentTechnique = mDebugShader.Techniques["Color"];
-            mDebugShader.Parameters["WorldViewProjection"].SetValue(cameraMatrix);
+            mDebugShader.Parameters["World"].SetValue(Matrix.Identity);
+            mDebugShader.Parameters["ViewProjection"].SetValue(cameraMatrix);
             mDebugShader.CurrentTechnique.Passes[0].Apply();
 
             // turn off back face culling
@@ -686,25 +657,105 @@ namespace Bounce
 
         public void renderAxisAlignedCube( Vector3 min, Vector3 max, Color color, Matrix viewProjection )
         {
-            var corners = new[]
-            {
-                new Vector3(min.X, max.Y, max.Z),
-                new Vector3(max.X, max.Y, max.Z),
-                new Vector3(max.X, min.Y, max.Z),
-                new Vector3(min.X, min.Y, max.Z),
-
-                new Vector3(min.X, max.Y, min.Z),
-                new Vector3(max.X, max.Y, min.Z),
-                new Vector3(max.X, min.Y, min.Z),
-                new Vector3(min.X, min.Y, min.Z),
-            };
-
+            var corners = new BoundingBox(min, max).GetCorners().ToArray();
             renderCube(corners, color, viewProjection);
         }
 
-        public void renderShadowMapOverlay(Camera camera, Model arenaShadowModel, ShadowMapOverlayMode overlayMode)
+        public void fillTextureWithBlockPattern(Texture2D targetTexture, int blockSize)
         {
-            if (overlayMode == ShadowMapOverlayMode.None)
+            targetTexture.SetData(
+                Enumerable.Range(0, mShadowMap.Height * mShadowMap.Width).Select(i =>
+                    {
+                        int x = i % mShadowMap.Width;
+                        int y = i / mShadowMap.Height;
+
+                        var xBlack = (x % blockSize) > (blockSize / 2);
+                        var yBlack = (y % blockSize) > (blockSize / 2);
+
+                        return (xBlack ^ yBlack) ? 1.0f : 0.0f;
+                    }).ToArray());
+        }
+
+        public void swapShadowMapWithBlockTexture()
+        {
+            RenderTarget2D tmp = mShadowMap;
+            mShadowMap = mBlockTexture;
+            mBlockTexture = tmp;
+        }
+
+
+        public void renderShadowedPlane(Camera camera)
+        {
+            var worldMatrix = Matrix.CreateScale(1000.0f, 1000.0f, 1.0f) * Matrix.CreateRotationX(-(float)Math.PI / 2.0f);
+
+            mDebugShader.CurrentTechnique = mDebugShader.Techniques["Shadow"];
+            mDebugShader.Parameters["World"].SetValue(worldMatrix);
+            mDebugShader.Parameters["ViewProjection"].SetValue(camera.viewMatrix * camera.projectionMatrix);
+            mDebugShader.Parameters["ShadowMap"].SetValue(mShadowMap);
+            mDebugShader.Parameters["ShadowTransform"].SetValue(ShadowSplitProjectionsWithTiling);
+            mDebugShader.Parameters["TileBounds"].SetValue(ShadowSplitTileBounds);
+            mDebugShader.Parameters["SplitColors"].SetValue(ShadowSplitColors.Select(c => c.ToVector4()).ToArray());
+
+            mDebugShader.CurrentTechnique.Passes[0].Apply();
+
+            mDebugVertices.SetData(GeometryHelper.fullscreenQuad(Color.White, 1.0f).ToArray());
+            mGraphicsDevice.SetVertexBuffer(mDebugVertices);
+            mGraphicsDevice.DrawPrimitives(PrimitiveType.TriangleStrip, 0, 2);
+            mGraphicsDevice.SetVertexBuffer(null);
+        }
+
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+        public void renderReconstructedShadowScene(Camera camera)
+        {
+            var oldRasterizerState = mGraphicsDevice.RasterizerState;            
+            mDebugShader.CurrentTechnique = mDebugShader.Techniques["ReconstructScene"];
+            mDebugShader.Parameters["ViewProjection"].SetValue(camera.viewMatrix * camera.projectionMatrix);
+            mDebugShader.Parameters["ShadowMap"].SetValue(mShadowMap);
+          //  mDebugShader.Parameters["ShadowMap"].SetValue(mBlockTexture);
+            mDebugShader.Parameters["ShadowTransform"].SetValue(ShadowSplitProjectionsWithTiling);
+            mDebugShader.Parameters["TileBounds"].SetValue(ShadowSplitTileBounds);
+
+
+            mGraphicsDevice.SetVertexBuffer(mGridVertices);
+          //  mGraphicsDevice.RasterizerState = new RasterizerState { FillMode = FillMode.Solid, CullMode = CullMode.None };
+
+            for (int i = 0; i <  4; ++i)
+            {
+
+                var textureOffset = new Vector2(i % 2, i / 2) * 0.5f;
+                mDebugShader.Parameters["InverseShadowTransform"].SetValue(Matrix.Invert(ShadowSplitProjectionsWithTiling[i]));
+                mDebugShader.Parameters["TextureOffset"].SetValue(textureOffset);
+                mDebugShader.Parameters["TintColor"].SetValue(ShadowSplitColors[i].ToVector4());
+                mDebugShader.Parameters["SplitIndex"].SetValue(i);
+
+                mDebugShader.CurrentTechnique.Passes[0].Apply();
+
+                // do z prepass first
+                mGraphicsDevice.BlendState = new BlendState { ColorWriteChannels = Microsoft.Xna.Framework.Graphics.ColorWriteChannels.None };
+                for (int v=0; v<mGridVertices.VertexCount/3; v += MaxSupportedPrimitivesPerDraw)
+                {
+                    int batchPrimitives = Math.Min(mGridVertices.VertexCount / 3 - v, MaxSupportedPrimitivesPerDraw);
+                    mGraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, v, batchPrimitives);
+                }
+
+                //
+                mGraphicsDevice.BlendState = new BlendState { ColorWriteChannels = Microsoft.Xna.Framework.Graphics.ColorWriteChannels.All };
+                for (int v = 0; v < mGridVertices.VertexCount / 3; v += MaxSupportedPrimitivesPerDraw)
+                {
+                    int batchPrimitives = Math.Min(mGridVertices.VertexCount / 3 - v, MaxSupportedPrimitivesPerDraw);
+                    mGraphicsDevice.DrawPrimitives(PrimitiveType.TriangleList, v, batchPrimitives);
+                }
+
+            }
+            mDebugShader.Parameters["ShadowMap"].SetValue((Texture)null);
+
+            mGraphicsDevice.RasterizerState = oldRasterizerState;
+        }
+#endif
+
+        public void renderShadowMapOverlay(Camera camera, Model arenaShadowModel, BounceGame.ShadowMapOverlayMode overlayMode)
+        {
+            if (overlayMode == BounceGame.ShadowMapOverlayMode.None)
                 return;
 
             var OverlaySize = 0.9f;
@@ -745,7 +796,8 @@ namespace Bounce
                 mGraphicsDevice.DepthStencilState = depthAlwaysPass;
 
                 mDebugShader.CurrentTechnique = mDebugShader.Techniques["Color"];
-                mDebugShader.Parameters["WorldViewProjection"].SetValue(Matrix.Identity);
+                mDebugShader.Parameters["World"].SetValue(Matrix.Identity);
+                mDebugShader.Parameters["ViewProjection"].SetValue(Matrix.Identity);
                 mDebugShader.CurrentTechnique.Passes[0].Apply();
 
                 mDebugVertices.SetData(GeometryHelper.fullscreenQuad(Color.White, 1.0f).ToArray());
@@ -756,7 +808,7 @@ namespace Bounce
             }
 
             // render frustums
-            if (overlayMode == ShadowMapOverlayMode.ShadowFrustums)
+            if (overlayMode == BounceGame.ShadowMapOverlayMode.ShadowFrustums)
             {
                 var scaleMatrix = Matrix.Identity;
                 scaleMatrix.M11 = 0.75f;
@@ -765,7 +817,8 @@ namespace Bounce
                 // render arena in lightspace
                 {
                     mDebugShader.CurrentTechnique = mDebugShader.Techniques["ShadowModel"];
-                    mDebugShader.Parameters["WorldViewProjection"].SetValue(mShadowView * mShadowProjection * scaleMatrix);
+                    mDebugShader.Parameters["World"].SetValue(Matrix.Identity);
+                    mDebugShader.Parameters["ViewProjection"].SetValue(mShadowView * mShadowProjection * scaleMatrix);
                     mDebugShader.CurrentTechnique.Passes[0].Apply();
                     mGraphicsDevice.DepthStencilState = DepthStencilState.Default;
 
@@ -798,7 +851,8 @@ namespace Bounce
             else  // render shadow map as overlay
             {
                 mDebugShader.CurrentTechnique = mDebugShader.Techniques["ShadowTexture"];
-                mDebugShader.Parameters["WorldViewProjection"].SetValue(Matrix.Identity);
+                mDebugShader.Parameters["World"].SetValue(Matrix.Identity);
+                mDebugShader.Parameters["ViewProjection"].SetValue(Matrix.Identity);
                 mDebugShader.Parameters["TextureScale"].SetValue(new float[] { 0, 0.25f });
                 mDebugShader.Parameters["DebugTexture"].SetValue(mShadowMap);
                 mDebugShader.CurrentTechnique.Passes[0].Apply();
@@ -810,7 +864,7 @@ namespace Bounce
             }
 
             // render viewer camera frustum on top of shadow map overlay
-            if (overlayMode == ShadowMapOverlayMode.ShadowMapAndViewFrustum)
+            if (overlayMode == BounceGame.ShadowMapOverlayMode.ShadowMapAndViewFrustum)
             {
                 // for each shadow projection
                 for (int i = 0; i < mNumShadowSplits; ++i)

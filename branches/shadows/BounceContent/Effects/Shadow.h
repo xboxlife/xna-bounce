@@ -7,8 +7,9 @@ float4x4 ShadowTransform[NumSplits];
 float4x4 ShadowTransform;
 #endif
 
+float ShadowMapSize = 512.0f;
 float4 TileBounds[NumSplits];
-float4 SplitColors[NumSplits];
+float4 SplitColors[NumSplits+1];
 
 float2 PoissonKernel[12];
 float  PoissonKernelScale[NumSplits + 1] = { 1.0f, 1.10f, 1.2f, 1.3f, 0.0f };
@@ -65,6 +66,7 @@ struct ShadowData
 	float3 WorldPosition;
 };
 
+
 ShadowData GetShadowData( float4 worldPosition, float4 clipPosition )
 {
 	ShadowData result;
@@ -79,7 +81,6 @@ ShadowData GetShadowData( float4 worldPosition, float4 clipPosition )
 		lightSpaceDepth[i] = texCoords[i].z;
 	}
 
-	
 	result.TexCoords_0_1 = float4(texCoords[0].xy, texCoords[1].xy);
 	result.TexCoords_2_3 = float4(texCoords[2].xy, texCoords[3].xy);
 	result.LightSpaceDepth = float4(lightSpaceDepth[0], lightSpaceDepth[1], lightSpaceDepth[2], lightSpaceDepth[3]); 
@@ -131,6 +132,7 @@ float GetShadowFactor( ShadowData shadowData )
 }
 
 #elseif defined(PCF)
+
 float3 GetShadowFactor( ShadowData shadowData )
 {
 
@@ -168,49 +170,54 @@ float3 GetShadowFactor( ShadowData shadowData )
 }
 #else
 
-int GetSplitIndex(ShadowData shadowData)
+struct ShadowSplitInfo
 {
+	float2 TexCoords;
+	float  LightSpaceDepth;
+	int    SplitIndex;
+};
+
+ShadowSplitInfo GetSplitInfo( ShadowData shadowData )
+{
+	
 	float2 shadowTexCoords[NumSplits] = 
 	{
-		shadowData.TexCoords_0_1.xy,
+		shadowData.TexCoords_0_1.xy, 
 		shadowData.TexCoords_0_1.zw,
 		shadowData.TexCoords_2_3.xy,
-		shadowData.TexCoords_2_3.zw,
+		shadowData.TexCoords_2_3.zw
 	};
 
-
-	for( int i=0; i<NumSplits; ++i )
-	{		
-		if( shadowTexCoords[i].x >= TileBounds[i].x && 
-			shadowTexCoords[i].x <= TileBounds[i].y && 
-			shadowTexCoords[i].y >= TileBounds[i].z && 
-			shadowTexCoords[i].y <= TileBounds[i].w )
+	float lightSpaceDepth[NumSplits] = 
+	{
+		shadowData.LightSpaceDepth.x,
+		shadowData.LightSpaceDepth.y,
+		shadowData.LightSpaceDepth.z,
+		shadowData.LightSpaceDepth.w,
+	};
+	
+	for( int splitIndex=0; splitIndex < NumSplits; splitIndex++ )
+	{
+		if( shadowTexCoords[splitIndex].x >= TileBounds[splitIndex].x && shadowTexCoords[splitIndex].x <= TileBounds[splitIndex].y && 
+			shadowTexCoords[splitIndex].y >= TileBounds[splitIndex].z && shadowTexCoords[splitIndex].y <= TileBounds[splitIndex].w )
 		{
-			return i;
+			ShadowSplitInfo result;
+			result.TexCoords = shadowTexCoords[splitIndex];
+			result.LightSpaceDepth = lightSpaceDepth[splitIndex];
+			result.SplitIndex = splitIndex;
+
+			return result;
 		}
 	}
 
-	return NumSplits;
-}
-
-float2 GetSplitTexCoords(const int splitIndex, ShadowData shadowData)
-{
-	float2 shadowTexCoords[NumSplits+1] = 
-	{
-		shadowData.TexCoords_0_1.xy,
-		shadowData.TexCoords_0_1.zw,
-		shadowData.TexCoords_2_3.xy,
-		shadowData.TexCoords_2_3.zw,
-		float2(0,0)
-	};
-
-	return shadowTexCoords[splitIndex];
+	ShadowSplitInfo result = { float2(0,0), 0, NumSplits };
+	return result;
 }
 
 float4 GetSplitIndexColor( ShadowData shadowData )
 {
-	const int splitIndex = GetSplitIndex(shadowData);
-	return SplitColors[splitIndex];
+	ShadowSplitInfo splitInfo = GetSplitInfo(shadowData);
+	return SplitColors[splitInfo.SplitIndex];
 }
 
 struct CascadeBlendingInfo
@@ -218,6 +225,7 @@ struct CascadeBlendingInfo
 	float2 BlendFactor;
 	float4 TexCoords;
 	int2 CascadeIndices;
+	float4 SplitColor;
 };
 
 CascadeBlendingInfo GetBlendingInfo(ShadowData shadowData)
@@ -232,7 +240,7 @@ CascadeBlendingInfo GetBlendingInfo(ShadowData shadowData)
 	};
 
 	CascadeBlendingInfo result = (CascadeBlendingInfo)0;
-	const float blendingBandSize = 16.0f / 512.0f;
+	const float blendingBandSize = 16.0f / ShadowMapSize;
 
 	for( int i=0; i<NumSplits; ++i )
 	{		
@@ -277,17 +285,9 @@ float GetShadowFactor( ShadowData shadowData, float ndotl )
 	float t = smoothstep(randomValues.x * 0.5, 1.0f, l);
 
 	const int numSamples = 6;
-	const int splitIndex = GetSplitIndex(shadowData);
-	const float2 shadowTexCoords = GetSplitTexCoords(splitIndex, shadowData);
-	
-	float lightSpaceDepth[NumSplits+1] = 
-	{
-		shadowData.LightSpaceDepth.x,
-		shadowData.LightSpaceDepth.y,
-		shadowData.LightSpaceDepth.z,
-		shadowData.LightSpaceDepth.w,
-		1.0f
-	};
+	ShadowSplitInfo splitInfo = GetSplitInfo(shadowData);
+
+//	return (splitInfo.LightSpaceDepth <  tex2Dlod( ShadowMapSampler, float4(splitInfo.TexCoords, 0, 0)).r);
 
 	float result = 0;
 	for(int s=0; s<numSamples; ++s)
@@ -297,8 +297,8 @@ float GetShadowFactor( ShadowData shadowData, float ndotl )
 			rotation.y * PoissonKernel[s].x + rotation.x * PoissonKernel[s].y
 		);
 
-		const float4 randomizedTexCoords = float4(shadowTexCoords + poissonOffset * PoissonKernelScale[splitIndex], 0, 0);
-		result += lightSpaceDepth[splitIndex] <  tex2Dlod( ShadowMapSampler, randomizedTexCoords).r;
+		const float4 randomizedTexCoords = float4(splitInfo.TexCoords + poissonOffset * PoissonKernelScale[splitInfo.SplitIndex], 0, 0);
+		result += splitInfo.LightSpaceDepth <  tex2Dlod( ShadowMapSampler, randomizedTexCoords).r;
 	}
 
 	float shadowFactor = result / numSamples * t;
@@ -341,7 +341,7 @@ float GetShadowFactor( ShadowData shadowData )
 
 //		result += rotatedPoissonKernel[i].x;
 	}
-//	return result / 12.0f * 512.0f;
+//	return result / 12.0f * ShadowMapSize;
 
 //	return rotation.x * 0.5 +0.5;
 

@@ -162,7 +162,10 @@ namespace Bounce
             }
             else
             {
-                technique ="LightTexturesNormalmaps";
+                if (noTextures)
+                    technique = "Light";
+                else
+                    technique ="LightTexturesNormalmaps";
             }
             foreach (var part in model.Meshes.SelectMany(m => m.MeshParts))
             {
