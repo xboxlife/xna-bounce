@@ -25,18 +25,7 @@ public class GeometryHelper
 
     public static IEnumerable<Vector3> splitFrustum(float near, float far, Matrix m)
     {
-        var clipCorners = new[]
-            {
-                new Vector3( -1, 1, near ),
-                new Vector3( 1, 1, near ), 
-                new Vector3( 1, -1, near ),
-                new Vector3( -1, -1, near ), 
-                new Vector3( -1, 1, far ),
-                new Vector3( 1, 1, far ),
-                new Vector3( 1, -1, far ),
-                new Vector3( -1, -1, far )
-            };
-
+        var clipCorners = new BoundingBox(new Vector3(-1, -1, near), new Vector3(1, 1, far)).GetCorners();
         return clipCorners.Select(v =>
         {
             var vt = Vector4.Transform(v, m);
@@ -123,5 +112,70 @@ public class GeometryHelper
             new Vector2(-0.321940f, -0.932615f),
             new Vector2(-0.791559f, -0.597710f)
         };
+    }
+
+    public static IEnumerable<Vector3> cubeTriangleList(Vector3[] cubeCorners)
+    {
+        return new[]
+        {
+            // face 1
+            cubeCorners[6], cubeCorners[2], cubeCorners[1],
+            cubeCorners[1], cubeCorners[5], cubeCorners[6],
+ 
+            // face 2
+            cubeCorners[3], cubeCorners[2], cubeCorners[6],
+            cubeCorners[6], cubeCorners[7], cubeCorners[3],
+
+            // face 3
+            cubeCorners[0], cubeCorners[3], cubeCorners[7],
+            cubeCorners[7], cubeCorners[4], cubeCorners[0],
+
+            // face 4
+            cubeCorners[5], cubeCorners[1], cubeCorners[0],
+            cubeCorners[0], cubeCorners[4], cubeCorners[5],
+
+            // face 5
+            cubeCorners[6], cubeCorners[5], cubeCorners[4],
+            cubeCorners[4], cubeCorners[7], cubeCorners[6],
+
+            // face 6
+            cubeCorners[0], cubeCorners[1], cubeCorners[2],
+            cubeCorners[2], cubeCorners[3], cubeCorners[0], 
+        };
+    }
+
+    public static IEnumerable<Vector4> normalizedGridVertices(int width, int height)
+    {
+        float border = 0.0251f;
+
+        // figure out shading values
+        var lightDirection = Vector3.Normalize(new Vector3(0.2f, 1, 0.25f));
+        var faceNormals = new[]
+            {
+                Vector3.Right,
+                Vector3.Backward,
+                Vector3.Left,
+                Vector3.Forward,
+                Vector3.Up
+            };
+
+        var colors = faceNormals.Select(n => Vector3.Dot(n, lightDirection)*0.25f + 0.75f).ToArray();
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                var min = new Vector3((x + border) / width, (y + border) / height, 0.0f);
+                var max = new Vector3((x + 1 - border) / width, (y + 1 - border) / height, 1.0f);
+
+                var axisAlignedCube = new BoundingBox(min, max);
+                var triangles = cubeTriangleList(axisAlignedCube.GetCorners()).Take(30).ToArray();
+
+                for (int i = 0; i < triangles.Length; ++i)
+                {
+                    var c = colors[i / 6];
+                    yield return new Vector4(triangles[i].X, triangles[i].Y, triangles[i].Z, c);
+                }
+            }
+        }
     }
 }

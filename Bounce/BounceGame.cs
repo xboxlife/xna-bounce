@@ -41,6 +41,32 @@ namespace Bounce
     /// </summary>
     public class BounceGame : Microsoft.Xna.Framework.Game
     {
+        public enum ShadowMapOverlayMode
+        {
+            None,
+            ShadowFrustums,
+            ShadowMap,
+            ShadowMapAndViewFrustum
+        };
+
+        public enum VirtualCameraMode
+        {
+            None,
+            ViewFrustum,
+            ShadowSplits
+        };
+
+        public enum SceneShadowMode
+        {
+            Default,
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+            ReconstructShadowScene,
+#endif
+            SplitColors,
+            BlockPattern,
+            BlockPatternOnPlane,
+        };
+
         GraphicsDeviceManager mGraphicsManager;
         Arena mArena;
 
@@ -139,17 +165,11 @@ namespace Bounce
 
         public bool mBlockInput = false;
 
-        public enum VirtualCameraMode
-        {
-            None,
-            ViewFrustum,
-            ShadowSplits
-        };
-
         Camera mVirtualCamera = new VirtualCamera();
-        VirtualCameraMode mVirtualCameraMode = VirtualCameraMode.None;
 
-        Renderer.ShadowMapOverlayMode mShadowMapOverlay = Renderer.ShadowMapOverlayMode.None;
+        VirtualCameraMode mVirtualCameraMode = VirtualCameraMode.None;
+        ShadowMapOverlayMode mShadowMapOverlay = ShadowMapOverlayMode.None;
+        SceneShadowMode mSceneShadowMode = SceneShadowMode.Default;
 
         public BounceGame()
         {
@@ -280,6 +300,12 @@ namespace Bounce
 
         }
 
+        public T nextEnumValue<T>(T currentValue)
+        {
+            // not nice but simplifies a lot of code
+            int nextValue = ((int)(object)currentValue + 1) % Enum.GetValues(typeof(T)).Length;
+            return (T)(object)nextValue;
+        }
 
         /// <summary>
         /// Allows the game to run logic such as updating the world,
@@ -290,6 +316,38 @@ namespace Bounce
         {
             // get input first
             gatherInput();
+
+            // check for other keys pressed on keyboard
+            if (keyboardInput.IsKeyDown(Keys.T) && !previousKeyboardInput.IsKeyDown(Keys.T))
+            {
+                var previousSceneShadowMode = mSceneShadowMode;
+                mSceneShadowMode = nextEnumValue(mSceneShadowMode);
+
+                if (previousSceneShadowMode < SceneShadowMode.BlockPattern && mSceneShadowMode >= SceneShadowMode.BlockPattern ||
+                    previousSceneShadowMode >= SceneShadowMode.BlockPattern && mSceneShadowMode < SceneShadowMode.BlockPattern)
+                {
+                    mRenderer.swapShadowMapWithBlockTexture();
+                }  
+
+                mArena.renderShadowSplitIndex = mSceneShadowMode >= SceneShadowMode.SplitColors;
+            }
+
+            if (keyboardInput.IsKeyDown(Keys.R) && !previousKeyboardInput.IsKeyDown(Keys.R))
+            {
+                mRenderer.mSnapShadowMaps = !mRenderer.mSnapShadowMaps;
+            }
+            if (keyboardInput.IsKeyDown(Keys.X) && !previousKeyboardInput.IsKeyDown(Keys.X))
+            {
+                mVirtualCameraMode = nextEnumValue(mVirtualCameraMode);
+                mOverlay.virtualCameraMode = mVirtualCameraMode;
+            }
+
+            if (keyboardInput.IsKeyDown(Keys.E) && !previousKeyboardInput.IsKeyDown(Keys.E))
+            {
+                mShadowMapOverlay = nextEnumValue(mShadowMapOverlay);
+                mOverlay.shadowOverlayMode = mShadowMapOverlay;
+            }
+            
 
             if (keyboardInput.IsKeyDown(Keys.B) && !previousKeyboardInput.IsKeyDown(Keys.B))
             {
@@ -315,31 +373,8 @@ namespace Bounce
                 mSimulator.addSphere(mPlayer.position, mPlayer.shootDirection() * 20f);
             }
 
-            // check for other keys pressed on keyboard
-            if (keyboardInput.IsKeyDown(Keys.T) && !previousKeyboardInput.IsKeyDown(Keys.T))
-            {
-                mArena.renderShadowSplitIndex = !mArena.renderShadowSplitIndex;
-                mOverlay.showShadowSplits = mArena.renderShadowSplitIndex;
-               
-            }
-            if (keyboardInput.IsKeyDown(Keys.R) && !previousKeyboardInput.IsKeyDown(Keys.R))
-            {
-                mRenderer.mSnapShadowMaps = !mRenderer.mSnapShadowMaps;
-            }
-            if (keyboardInput.IsKeyDown(Keys.X) && !previousKeyboardInput.IsKeyDown(Keys.X))
-            {
-                int virtualCameraMode = ((int)mVirtualCameraMode + 1) % Enum.GetValues(typeof(VirtualCameraMode)).Length;
-                mVirtualCameraMode = (VirtualCameraMode)virtualCameraMode;
-                mOverlay.virtualCameraMode = mVirtualCameraMode;
-            }
-
-            if (keyboardInput.IsKeyDown(Keys.E) && !previousKeyboardInput.IsKeyDown(Keys.E))
-            {
-                 int overlayMode = ((int)mShadowMapOverlay + 1) % Enum.GetValues(typeof(Renderer.ShadowMapOverlayMode)).Length;
-                 mShadowMapOverlay = (Renderer.ShadowMapOverlayMode)overlayMode;
-                 mOverlay.shadowOverlayMode = mShadowMapOverlay;
-            }
-            
+           
+        
 
             // update spheres simulation
             mSimulator.update(gameTime);
@@ -405,28 +440,26 @@ namespace Bounce
         // reads keyboard and mouse input, sets mouse position to the origin (center of the window)
         private void gatherInput()
         {
-           
-                // store previous input
-                mPreviousKeyboardInput = mKeyboardInput;
-                mPreviousMouseInput = mMouseInput;
+            // store previous input
+            mPreviousKeyboardInput = mKeyboardInput;
+            mPreviousMouseInput = mMouseInput;
 
-                // get new input
-                mKeyboardInput = Keyboard.GetState();
-                mMouseInput = Mouse.GetState();
-                mMouseMovement = new Vector2(
-                    mMouseInput.X - GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
-                    mMouseInput.Y - GraphicsDevice.PresentationParameters.BackBufferHeight / 2
+            // get new input
+            mKeyboardInput = Keyboard.GetState();
+            mMouseInput = Mouse.GetState();
+            mMouseMovement = new Vector2(
+                mMouseInput.X - GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
+                mMouseInput.Y - GraphicsDevice.PresentationParameters.BackBufferHeight / 2
+                );
+
+            // set mouse pos to center of window, in order to avoid getting stuck at edges of screen
+            if (!mBlockInput)
+            {
+                Mouse.SetPosition(
+                    GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight / 2
                     );
-
-                // set mouse pos to center of window, in order to avoid getting stuck at edges of screen
-                if (!mBlockInput)
-                {
-                    Mouse.SetPosition(
-                        GraphicsDevice.PresentationParameters.BackBufferWidth / 2,
-                        GraphicsDevice.PresentationParameters.BackBufferHeight / 2
-                        );
-                }
-         
+            }
         }
 
         // checks for player - level collisions, moves player out of colliding state if necessary
@@ -504,7 +537,7 @@ namespace Bounce
             DrawShadows(gameTime, shadowCamera, numSpheres);
             DrawScene(gameTime, mPlayer.camera, numSpheres);
 
-            if (mShadowMapOverlay != Renderer.ShadowMapOverlayMode.None)
+            if (mShadowMapOverlay != ShadowMapOverlayMode.None)
             {
                 mRenderer.renderShadowMapOverlay(shadowCamera, mArena.shadowModel, mShadowMapOverlay);
             }
@@ -518,8 +551,12 @@ namespace Bounce
 
         public void DrawShadows(GameTime gameTime, Camera camera, int numSpheres)
         {
-            mRenderer.SetCurrentPass(Renderer.RenderPass.ShadowPass);
-            mRenderer.renderShadow(mArena.shadowModel, mSphere.shadowModel, numSpheres, camera);
+            // only render shadow map if we're not filling it with a block pattern
+            if(mSceneShadowMode < SceneShadowMode.BlockPattern)
+            {
+                mRenderer.SetCurrentPass(Renderer.RenderPass.ShadowPass);
+                mRenderer.renderShadow(mArena.shadowModel, mSphere.shadowModel, numSpheres, camera);
+            }
         }
 
         public void DrawScene(GameTime gameTime, Camera camera, int numSpheres)
@@ -536,22 +573,49 @@ namespace Bounce
                 mRenderer.render(mSkyBox, Matrix.CreateRotationY(mLightRotationY), Matrix.CreateTranslation(mPlayer.position), camera);
             }
 
-            // render arena 
-            if (!mOverlay.drawCollisionGeometry)
-            {
-                mRenderer.render(mArena.model, camera);
-            }
-            else
-            {
-                mRenderer.renderCollisionGeometry(mArena.CollisionData.geometry, camera);
-            }
+            switch (mSceneShadowMode)
+            { 
+#if ENABLE_RECONSTRUCTED_SCENE_VISUALIZATION
+                case SceneShadowMode.ReconstructShadowScene:
+                  //  mRenderer.renderShadowedPlane(camera);
+                    
+                    mRenderer.renderReconstructedShadowScene(camera);
 
-            // render spheres
-            mRenderer.renderInstanced(mSphere.model, camera, numSpheres);
+                    if(false)
+                    {
+                        GraphicsDevice.Clear(ClearOptions.DepthBuffer, Color.Black, 1.0f, 0);
+                        mGraphicsManager.GraphicsDevice.BlendState = new BlendState { ColorWriteChannels = Microsoft.Xna.Framework.Graphics.ColorWriteChannels.None };
 
-            // render colliding faces
-       //     if (mOverlay.drawCollidingTriangles)
-       //         mRenderer.renderCollidingFaces(mArena.CollisionData.geometry, mCollidingFacesBuffer, camera, 0, mNumTicksCollidingFaceIsVisible);
+                        mArena.noTextures = true;
+                        mRenderer.render(mArena.model, camera);
+                        mGraphicsManager.GraphicsDevice.BlendState = new BlendState 
+                        { 
+                            ColorWriteChannels = Microsoft.Xna.Framework.Graphics.ColorWriteChannels.All,
+                            ColorSourceBlend = Blend.BlendFactor,
+                            ColorDestinationBlend = Blend.InverseBlendFactor                        
+                        };
+                        float arenaAlpha = 0.15f;
+                        mGraphicsManager.GraphicsDevice.BlendFactor = new Color(arenaAlpha, arenaAlpha, arenaAlpha, arenaAlpha);
+                   
+                        mRenderer.render(mArena.model, camera);
+
+                        mGraphicsManager.GraphicsDevice.BlendState = BlendState.Opaque;
+                        mArena.noTextures = false;
+                    }
+
+                    break;
+#endif
+                case SceneShadowMode.Default:
+                case SceneShadowMode.SplitColors:
+                case SceneShadowMode.BlockPattern:
+                    mRenderer.render(mArena.model, camera);
+                    mRenderer.renderInstanced(mSphere.model, camera, numSpheres);
+                    break;
+
+                case SceneShadowMode.BlockPatternOnPlane:
+                    mRenderer.renderShadowedPlane(camera);
+                    break;                    
+            }
 
             // render virtual camera
             switch (mVirtualCameraMode)
